@@ -1,15 +1,44 @@
-"""Tests for the Task Manager API using FastAPI TestClient."""
+"""Tests for the Task Manager API — using a separate test database."""
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from main import app, tasks
+from database import Base
+from main import app, get_db
+
+TEST_DB_URL = "sqlite:///./test_tasks.db"
+test_engine = create_engine(
+    TEST_DB_URL,
+    connect_args={"check_same_thread": False},
+)
+TestingSessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, bind=test_engine
+)
+
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
+
+
+@pytest.fixture(autouse=True)
+def reset_db():
+    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.create_all(bind=test_engine)
+    yield
+    Base.metadata.drop_all(bind=test_engine)
 
 
 @pytest.fixture
 def client():
-    """Fresh TestClient with empty tasks before each test."""
-    tasks.clear()
     return TestClient(app)
 
 
@@ -37,6 +66,7 @@ def test_create_task(client):
     body = r.json()
     assert body["title"] == "Buy milk"
     assert body["done"] is False
+    assert "id" in body
 
 
 def test_create_task_missing_title(client):
@@ -46,28 +76,35 @@ def test_create_task_missing_title(client):
 
 def test_get_task_by_id(client):
     client.post("/tasks", json={"title": "Task A"})
-    client.post("/tasks", json={"title": "Task B"})
-    r = client.get("/tasks/1")
+    r2 = client.post("/tasks", json={"title": "Task B"})
+    task_id = r2.json()["id"]
+
+    r = client.get(f"/tasks/{task_id}")
     assert r.status_code == 200
     assert r.json()["title"] == "Task B"
 
 
 def test_get_task_not_found(client):
-    r = client.get("/tasks/99")
+    r = client.get("/tasks/9999")
     assert r.status_code == 404
     assert r.json()["detail"] == "Task not found"
 
 
 def test_update_task(client):
-    client.post("/tasks", json={"title": "Task A"})
-    r = client.put("/tasks/0", json={"done": True})
+    r = client.post("/tasks", json={"title": "Task A"})
+    task_id = r.json()["id"]
+
+    r = client.put(f"/tasks/{task_id}", json={"done": True})
     assert r.status_code == 200
     assert r.json()["done"] is True
     assert r.json()["title"] == "Task A"
 
 
 def test_delete_task(client):
-    client.post("/tasks", json={"title": "Task A"})
-    r = client.delete("/tasks/0")
+    r = client.post("/tasks", json={"title": "Task A"})
+    task_id = r.json()["id"]
+
+    r = client.delete(f"/tasks/{task_id}")
     assert r.status_code == 204
+
     assert client.get("/tasks").json() == []

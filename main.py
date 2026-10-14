@@ -1,43 +1,47 @@
-"""My first FastAPI application — Task Manager API.
+"""Task Manager API — FastAPI with SQLAlchemy + SQLite."""
 
-Run with:
-    uvicorn main:app --reload
-
-Endpoints:
-    GET    /              — root
-    GET    /health        — health check
-    GET    /tasks         — list all tasks
-    GET    /tasks/{id}    — get one task
-    POST   /tasks         — create a new task
-    PUT    /tasks/{id}    — update a task
-    DELETE /tasks/{id}    — delete a task
-"""
-
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from database import Base, SessionLocal, engine
+from models import TaskDB
+
+# Create tables on startup
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Task Manager API")
 
 
-# --- Data model ---
+# --- Pydantic models (request/response) ---
 
-class Task(BaseModel):
-    """A task with a title and completion status."""
-
+class TaskCreate(BaseModel):
     title: str
     done: bool = False
 
 
 class TaskUpdate(BaseModel):
-    """Fields allowed when updating a task (all optional)."""
-
     title: str | None = None
     done: bool | None = None
 
 
-# --- In-memory storage ---
+class TaskResponse(BaseModel):
+    id: int
+    title: str
+    done: bool
 
-tasks: list[Task] = []
+    model_config = {"from_attributes": True}
+
+
+# --- Database dependency ---
+
+def get_db():
+    """Provide a database session per request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 # --- Endpoints ---
@@ -52,46 +56,47 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/tasks")
-def list_tasks():
-    """List all tasks."""
-    return tasks
+@app.get("/tasks", response_model=list[TaskResponse])
+def list_tasks(db: Session = Depends(get_db)):
+    return db.query(TaskDB).all()
 
 
-@app.get("/tasks/{task_id}")
-def get_task(task_id: int):
-    """Get one task by ID. Returns 404 if not found."""
-    if task_id < 0 or task_id >= len(tasks):
+@app.get("/tasks/{task_id}", response_model=TaskResponse)
+def get_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return tasks[task_id]
+    return task
 
 
-@app.post("/tasks", status_code=201)
-def create_task(task: Task):
-    """Create a new task."""
-    tasks.append(task)
-    return {"id": len(tasks) - 1, **task.model_dump()}
+@app.post("/tasks", response_model=TaskResponse, status_code=201)
+def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+    db_task = TaskDB(title=task.title, done=task.done)
+    db.add(db_task)
+    db.commit()
+    db.refresh(db_task)
+    return db_task
 
 
-@app.put("/tasks/{task_id}")
-def update_task(task_id: int, update: TaskUpdate):
-    """Update an existing task (partial update)."""
-    if task_id < 0 or task_id >= len(tasks):
+@app.put("/tasks/{task_id}", response_model=TaskResponse)
+def update_task(task_id: int, update: TaskUpdate, db: Session = Depends(get_db)):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-
-    current = tasks[task_id]
     if update.title is not None:
-        current.title = update.title
+        task.title = update.title
     if update.done is not None:
-        current.done = update.done
-
-    return {"id": task_id, **current.model_dump()}
+        task.done = update.done
+    db.commit()
+    db.refresh(task)
+    return task
 
 
 @app.delete("/tasks/{task_id}", status_code=204)
-def delete_task(task_id: int):
-    """Delete a task."""
-    if task_id < 0 or task_id >= len(tasks):
+def delete_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(TaskDB).filter(TaskDB.id == task_id).first()
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    tasks.pop(task_id)
+    db.delete(task)
+    db.commit()
     return None
