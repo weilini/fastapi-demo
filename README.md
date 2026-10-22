@@ -1,6 +1,12 @@
 # Task Manager API
 
+[FastAPI CI](https://github.com/weilini/fastapi-demo/actions/workflows/ci.yml/badge.svg)
+
 A simple REST API built with FastAPI — my first Software Engineering project.
+
+ **Live API Demo:** [https://fastapi-demo-hbqh.onrender.com/docs](https://fastapi-demo-hbqh.onrender.com/docs)
+
+
 
 ## Endpoints
 
